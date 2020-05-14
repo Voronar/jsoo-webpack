@@ -1,0 +1,1 @@
+export const foo = "secret_string";
