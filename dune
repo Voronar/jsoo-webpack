@@ -8,5 +8,5 @@
 
 (alias
   (name main)
-  (deps main.bc.js index.html)
+  (deps main.bc.js)
 )

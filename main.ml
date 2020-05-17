@@ -1,6 +1,18 @@
 open Js_of_ocaml
-
+let _ = Js.Unsafe.js_expr {|require("antd/dist/antd.less")|}
+(* let antd = Js.Unsafe.js_expr {|require("antd")|} *)
+(* let table = Js.Unsafe.get antd "Table" *)
+let lazy_table = React.lazyc (fun () -> Js.Unsafe.js_expr {|require.ensure(["antd/lib/table/Table"], function(require) {
+  return require("antd/lib/table/Table");
+})|})
+let _ = Global.console_log lazy_table
 let ctx = React.create_context 1
+
+module Table: React.EXTERNALC with type t = Ojs.t = struct
+  type t = Ojs.t
+  [@@js]
+  let component = lazy_table
+end
 
 module NumberProvider: React.PROVIDER with type v = int = struct
   type v = int [@@js]
@@ -22,11 +34,14 @@ module Child: React.FC with type t = ChildProps.t = struct
   let make ChildProps.{onClick} ch = let open React in
     let c = use_context ctx in
     let _ = Global.console_log c in
-    div [] [
-      div [Html.Attr.OnClick (fun _ ->
-        onClick ()
-      )] [ch; int c]
-    ]
+    suspense ~fallback:(string "loading") [
+      div [] [
+        div [Html.Attr.OnClick (fun _ ->
+          onClick ()
+        )] [ch; int c];
+        extnc (module Table) Ojs.null []
+      ]
+    ];
 end
 
 module EntryPageProps = struct
