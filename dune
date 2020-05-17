@@ -1,7 +1,9 @@
 (executable
   (name main)
-  (libraries js_of_ocaml)
-  (preprocess (pps js_of_ocaml-ppx))
+  (js_of_ocaml)
+  (modes js)
+  (preprocess (pps gen_js_api.ppx js_of_ocaml-ppx))
+  (libraries js_of_ocaml gen_js_api)
 )
 
 (alias
