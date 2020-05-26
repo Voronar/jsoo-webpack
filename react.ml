@@ -19,6 +19,9 @@ let r_suspense = Js.Unsafe.get react_module "Suspense"
 let rd_render = Js.Unsafe.get react_dom_module "render"
 
 type element
+external element_to_js : element -> Ojs.t = "%identity"
+external element_of_js : Ojs.t -> element = "%identity"
+
 type fragment_component
 type other_component
 type 'a context_js
@@ -36,11 +39,41 @@ module type PROVIDER = sig
   val v_of_js: Ojs.t -> v
 end
 
+type memo_fc_type
+type 'a fc_type =
+  | Normal of ('a -> element)
+  | Memo of memo_fc_type
+
+let norm_fc fc = Normal fc
+let memo_fc fc = Memo fc
+
+let memo (fn: 'a -> element) ~t_of_js =
+  let el: memo_fc_type = Js.Unsafe.(fun_call r_memo [|
+    inject @@ Ojs.fun_to_js 1 (fun p -> let p = t_of_js p in fn p)
+  |]) in el
+
 module type FC = sig
   type t
   val t_to_js: t -> Ojs.t
   val t_of_js: Ojs.t -> t
-  val make: t -> element -> element
+  val make: t fc_type
+end
+
+module type NORM_FC = sig
+  type t
+  val t_to_js: t -> Ojs.t
+  val t_of_js: Ojs.t -> t
+  val make: t -> element
+end
+
+module NormFc (NormComponent: NORM_FC): FC with type t = NormComponent.t = struct
+  include NormComponent
+  let make = norm_fc NormComponent.make
+end
+
+module MemoFc (NormComponent: NORM_FC): FC with type t = NormComponent.t = struct
+  include NormComponent
+  let make = memo_fc (memo ~t_of_js NormComponent.make)
 end
 
 module type EXTERNALC = sig
@@ -54,25 +87,22 @@ type ('a, 'b) component =
   | HtmlTagComponent of string
   | ProviderComponent of 'b ctx_provider
   | OtherComponent of other_component
-  | FunctionalComponent of ('a -> element -> element)
+  | FunctionalComponent of 'a fc_type
 
 let parse_children = let open Js.Unsafe in function
-  | [] -> inject Js.Optdef.empty
+  | [] -> inject Js.undefined
   | [ch] -> inject ch
   | ch -> ch |> Array.of_list |> Js.array |> inject
 
-let create_element ~component ~props ~(children: element list) ~props_of_js : element =
-  let open Js.Unsafe in
+let create_element ~component ~props ~(children: element list) ~props_of_js : element = let open Js.Unsafe in
   let comp = match component with
     | HtmlTagComponent s -> inject @@ Js.string s
     | OtherComponent cc -> inject cc
     | ProviderComponent fn -> inject fn
-    | FunctionalComponent fn ->
+    | FunctionalComponent (Memo fn) -> inject fn
+    | FunctionalComponent (Normal fn) ->
       let props_of_js = Option.get props_of_js in
-      inject @@ Ojs.fun_to_js 1 (fun p ->
-        let c = get p "children" in
-        let p = props_of_js p in
-        fn p c)
+      inject @@ Ojs.fun_to_js 1 (fun p -> p |> props_of_js |> fn)
   in
   fun_call r_createElement [|comp;
     inject props;
@@ -170,10 +200,14 @@ let p (at: Dom_html.paragraphElement Html.Attr.attr list) ch = html_factory "p" 
 
 let fc (type a)
   (module ReactComponent: FC with type t = a)
-  (props: a) children
-= create_element ~children
-  ~component:(FunctionalComponent ReactComponent.make)
-  ~props:(ReactComponent.t_to_js props)
+  (props: a)
+= let props = (ReactComponent.t_to_js props) in
+  let children = match props with
+    | v when Ojs.is_null v -> []
+    | v -> [Ojs.get v "children" |> Obj.magic]
+  in
+  create_element ~props ~children
+  ~component:(FunctionalComponent (ReactComponent.make))
   ~props_of_js:(Some ReactComponent.t_of_js)
 
 let extnc (type a)
@@ -188,7 +222,7 @@ let fragment ?key children =
   let open Js.Unsafe in
   let props = match key with
     | Some s -> inject @@ object%js val key = Js.string s end
-    | None -> inject UndefOpt.empty
+    | None -> inject Js.undefined
   in
   create_element ~props ~children
     ~component:(OtherComponent r_fragment)
@@ -213,7 +247,7 @@ let provider (type a)
 
 let string str: element = Ojs.string_to_js str |> Obj.magic
 let int int: element = Ojs.int_to_js int |> Obj.magic
-let null: element = Js.Unsafe.pure_js_expr "null"
+let null: element = Ojs.null |> Obj.magic
 
 (* Hooks *)
 let use_effect (fn: unit -> (unit -> unit) Js.optdef): unit = let open Js.Unsafe in
@@ -276,8 +310,6 @@ let use_callback4 (fn: 'a -> 'b) ((d1,d2,d3,d4): ('c * 'd * 'e * 'f)): 'a -> 'b 
   fun_call r_useCallback [|inject @@ callback fn; inject @@ Js.array ([|d1; d2; d3;d4|] |> Array.map inject)|]
 
 (* Others *)
-let memo (fn: 'a -> 'b -> element): 'a -> 'b -> element =
-  Js.Unsafe.(fun_call r_memo [|inject @@ callback fn|])
 
 let lazyc (fn: unit -> element): 'a =
   Js.Unsafe.(fun_call r_lazy [|inject @@ callback fn|])
